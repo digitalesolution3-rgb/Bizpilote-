@@ -100,12 +100,17 @@ export const MobileNav: React.FC = () => {
           <button
             id="mobile-nav-dashboard"
             onClick={() => setActiveTab('dashboard')}
-            className={`flex flex-col items-center justify-center py-1 px-2 rounded-lg transition-all ${
+            className={`flex flex-col items-center justify-center py-1 px-2 rounded-lg transition-all relative ${
               activeTab === 'dashboard' ? 'text-blue-500 font-bold' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <TrendingUp className="h-5 w-5" />
-            <span className="text-[10px] mt-0.5">Rapports</span>
+            <div className="relative">
+              <TrendingUp className="h-5 w-5" />
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white font-black text-[8px] px-1 py-0.2 rounded-full uppercase">
+                Live
+              </span>
+            </div>
+            <span className="text-[10px] mt-0.5">Direct</span>
           </button>
         )}
       </div>

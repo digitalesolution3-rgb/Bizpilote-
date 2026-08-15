@@ -15,8 +15,12 @@ import {
   Lock,
   Phone,
   MapPin,
-  FileText
+  FileText,
+  Smartphone,
+  Bluetooth,
+  WifiOff
 } from 'lucide-react';
+import { blePrinter } from '../../lib/blePrinter';
 
 export const SettingsView: React.FC = () => {
   const { 
@@ -281,7 +285,60 @@ export const SettingsView: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Sauvegarde & Maintenance */}
+      {/* 3. Imprimante POS-80 BLE & Mode Hors-Ligne (PWA) */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+        <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+          <div className="flex items-center space-x-2">
+            <Smartphone className="h-5 w-5 text-blue-600" />
+            <h2 className="font-bold text-slate-900 text-sm sm:text-base">Imprimante POS-80 Bluetooth & Application PWA</h2>
+          </div>
+        </div>
+
+        <div className="p-5 space-y-4 text-xs">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-blue-50/60 border border-blue-200 rounded-xl">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Bluetooth className="h-4 w-4 text-blue-600" />
+                <p className="font-bold text-slate-900">Imprimante Thermique POS-80 / POS-58 (Bluetooth BLE)</p>
+              </div>
+              <p className="text-slate-600 text-[11px]">
+                Connectez directement votre smartphone, tablette ou ordinateur à votre imprimante de caisse sans passerelle ni pilote.
+              </p>
+            </div>
+            <button
+              onClick={async () => {
+                try {
+                  const dev = await blePrinter.connect();
+                  alert(`Imprimante connectée avec succès : ${dev.name}`);
+                } catch (e: any) {
+                  alert(e.message || 'Erreur de connexion Bluetooth');
+                }
+              }}
+              className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-3.5 py-2 rounded-xl font-bold text-xs shadow-xs transition shrink-0"
+            >
+              <Bluetooth className="h-4 w-4" />
+              <span>Tester Connexion BLE</span>
+            </button>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-xl">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <WifiOff className="h-4 w-4 text-emerald-600" />
+                <p className="font-bold text-slate-900">Fonctionnement 100% Hors-Ligne & Installation PWA</p>
+              </div>
+              <p className="text-slate-600 text-[11px]">
+                BizPilot enregistre chaque vente localement sur votre appareil. Même sans connexion Internet, vos encaissements et stocks restent actifs.
+              </p>
+            </div>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-800 font-bold text-[11px]">
+              <CheckCircle2 className="h-3.5 w-3.5" /> PWA Prêt (Ajouter à l'écran d'accueil)
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Sauvegarde & Maintenance */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
         <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
           <div className="flex items-center space-x-2">

@@ -61,7 +61,8 @@ export const Sidebar: React.FC = () => {
       id: 'dashboard' as const,
       label: 'Tableau de Bord',
       icon: TrendingUp,
-      badge: null,
+      badge: 'Live',
+      badgeColor: 'bg-red-600 text-white font-black text-[10px] uppercase tracking-wider',
       allowed: isOwner,
     },
     {

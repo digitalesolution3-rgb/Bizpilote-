@@ -15,8 +15,11 @@ import {
   Sparkles,
   Receipt,
   Layers,
-  Award
+  Award,
+  Radio,
+  BarChart3
 } from 'lucide-react';
+import { RemoteLiveMonitor } from './RemoteLiveMonitor';
 
 export const DashboardView: React.FC = () => {
   const { 
@@ -31,6 +34,7 @@ export const DashboardView: React.FC = () => {
     setActiveTab
   } = useApp();
 
+  const [viewMode, setViewMode] = useState<'live' | 'analytics'>('live');
   const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'all'>('month');
 
   // Filter dates
@@ -121,56 +125,91 @@ export const DashboardView: React.FC = () => {
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
       
-      {/* Header & Period Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {/* Top Header: View Mode Switcher & Title */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <span>Tableau de Bord & Indicateurs</span>
+            <span>Tableau de Bord & Supervision</span>
             <span className="text-xs font-semibold bg-blue-50 text-blue-800 px-2 py-0.5 rounded-full border border-blue-200">
               {business.currency}
             </span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Suivi financier, marge brute, bénéfice net estimé et performances commerciales.
+            Suivi des ventes en direct, chiffre d'affaires, marge brute et contrôle de caisse à distance.
           </p>
         </div>
 
-        {/* Period Selector */}
-        <div className="flex items-center space-x-1 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
+        {/* View Mode Toggle: Live Monitor vs Analytical Reports */}
+        <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-2xl border border-slate-200 shadow-2xs self-start md:self-auto">
           <button
-            onClick={() => setPeriod('today')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-              period === 'today' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
+            onClick={() => setViewMode('live')}
+            className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition ${
+              viewMode === 'live'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
             }`}
           >
-            Aujourd'hui
+            <Radio className={`h-3.5 w-3.5 ${viewMode === 'live' ? 'text-red-400 animate-pulse' : 'text-slate-500'}`} />
+            <span>Suivi Live Direct</span>
           </button>
+
           <button
-            onClick={() => setPeriod('week')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-              period === 'week' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
+            onClick={() => setViewMode('analytics')}
+            className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition ${
+              viewMode === 'analytics'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
             }`}
           >
-            7 Jours
-          </button>
-          <button
-            onClick={() => setPeriod('month')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-              period === 'month' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            30 Jours
-          </button>
-          <button
-            onClick={() => setPeriod('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-              period === 'all' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            Tout
+            <BarChart3 className="h-3.5 w-3.5" />
+            <span>Bilan Analytique</span>
           </button>
         </div>
       </div>
+
+      {/* Render Live Monitor or Analytical Dashboard */}
+      {viewMode === 'live' ? (
+        <RemoteLiveMonitor />
+      ) : (
+        <div className="space-y-6">
+          {/* Period Selector Bar for Analytics */}
+          <div className="flex items-center justify-between bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs">
+            <span className="text-xs font-bold text-slate-700">Période d'analyse :</span>
+            <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
+              <button
+                onClick={() => setPeriod('today')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  period === 'today' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200/60'
+                }`}
+              >
+                Aujourd'hui
+              </button>
+              <button
+                onClick={() => setPeriod('week')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  period === 'week' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200/60'
+                }`}
+              >
+                7 Jours
+              </button>
+              <button
+                onClick={() => setPeriod('month')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  period === 'month' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200/60'
+                }`}
+              >
+                30 Jours
+              </button>
+              <button
+                onClick={() => setPeriod('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  period === 'all' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200/60'
+                }`}
+              >
+                Tout
+              </button>
+            </div>
+          </div>
 
       {/* Main KPI Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -407,7 +446,9 @@ export const DashboardView: React.FC = () => {
           ))}
         </div>
       </div>
-
     </div>
-  );
+  )}
+
+</div>
+);
 };
