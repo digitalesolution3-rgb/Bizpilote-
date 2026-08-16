@@ -15,7 +15,8 @@ import {
   ShieldCheck,
   Building2,
   LogOut,
-  KeyRound
+  KeyRound,
+  RefreshCw
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
@@ -28,6 +29,7 @@ export const Navbar: React.FC = () => {
     logoutBusiness,
     isOnline, 
     isSyncing, 
+    forceSyncCloudData,
     notifications, 
     markNotificationAsRead, 
     clearAllNotifications,
@@ -98,15 +100,20 @@ export const Navbar: React.FC = () => {
             {/* Sync & Connectivity status */}
             <div className="flex items-center">
               {isOnline ? (
-                <div 
-                  className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default"
-                  title={isSyncing ? "Synchronisation Firestore en cours..." : "Connecté à Firestore Cloud (Prêt hors-ligne)"}
+                <button 
+                  onClick={() => forceSyncCloudData()}
+                  className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors cursor-pointer"
+                  title={isSyncing ? "Synchronisation Cloud Firestore en cours..." : "Connecté en temps réel. Cliquez pour forcer la synchronisation."}
                 >
-                  <Wifi className="h-3.5 w-3.5 text-emerald-600" />
+                  {isSyncing ? (
+                    <RefreshCw className="h-3.5 w-3.5 text-emerald-600 animate-spin" />
+                  ) : (
+                    <Wifi className="h-3.5 w-3.5 text-emerald-600" />
+                  )}
                   <span className="hidden sm:inline">
-                    {isSyncing ? 'Sync...' : 'En ligne'}
+                    {isSyncing ? 'Sync Cloud...' : 'En ligne (Cloud)'}
                   </span>
-                </div>
+                </button>
               ) : (
                 <div 
                   className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-300 animate-pulse cursor-default"

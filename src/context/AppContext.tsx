@@ -28,7 +28,7 @@ import {
   initialSales, 
   initialStockMovements 
 } from '../data/initialDemoData';
-import { db } from '../lib/firebase';
+import { db, sanitizeForFirestore, ensureFirebaseAuth } from '../lib/firebase';
 import { 
   collection, 
   doc, 
@@ -90,7 +90,7 @@ interface AppContextType {
   allBusinesses: Business[];
   business: Business;
   isBusinessAuthenticated: boolean;
-  authenticateBusiness: (accessCode: string) => { success: boolean; message?: string; business?: Business };
+  authenticateBusiness: (accessCode: string) => Promise<{ success: boolean; message?: string; business?: Business }>;
   logoutBusiness: () => void;
   createBusiness: (businessData: Omit<Business, 'id' | 'createdAt'>, ownerPin?: string) => Promise<Business>;
   updateBusiness: (id: string, updates: Partial<Business>) => Promise<void>;
@@ -180,6 +180,7 @@ interface AppContextType {
   isOnline: boolean;
   isSyncing: boolean;
   lastSyncedAt: Date | null;
+  forceSyncCloudData: () => Promise<void>;
   notifications: NotificationItem[];
   summary: BusinessSummary;
   markNotificationAsRead: (id: string) => void;
@@ -264,13 +265,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [showAdminPinModal, setShowAdminPinModal] = useState<boolean>(false);
   const logoClicksRef = React.useRef<{ count: number; timer: NodeJS.Timeout | null }>({ count: 0, timer: null });
 
-  // 1. Authenticate Business by Access Code
-  const authenticateBusiness = useCallback((rawCode: string) => {
+  // 1. Authenticate Business by Access Code (checks memory cache first, then directly queries Firestore)
+  const authenticateBusiness = useCallback(async (rawCode: string) => {
     const code = rawCode.trim().toUpperCase();
-    const found = allBusinesses.find(b => 
+    let found = allBusinesses.find(b => 
       (b.accessCode && b.accessCode.toUpperCase() === code) ||
       b.id.toUpperCase() === code
     );
+
+    // If not found in local memory state, query Firestore directly for real-time multi-device access
+    if (!found) {
+      try {
+        await ensureFirebaseAuth();
+        const snap = await getDocs(collection(db, 'businesses'));
+        if (!snap.empty) {
+          const list: Business[] = [];
+          snap.forEach(d => list.push({ id: d.id, ...d.data() } as Business));
+          setAllBusinesses(list);
+          found = list.find(b => 
+            (b.accessCode && b.accessCode.toUpperCase() === code) ||
+            b.id.toUpperCase() === code
+          );
+        }
+      } catch (err) {
+        console.warn('Direct Firestore business lookup notice:', err);
+      }
+    }
 
     if (!found) {
       return { 
@@ -291,7 +311,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsBusinessAuthenticated(true);
 
     // Switch to first owner/manager of this business
-    const storeUsers = allUsers.filter(u => u.businessId === found.id);
+    let storeUsers = allUsers.filter(u => u.businessId === found.id);
+    if (storeUsers.length === 0) {
+      try {
+        const uSnap = await getDocs(collection(db, 'users'));
+        if (!uSnap.empty) {
+          const uList: AppUser[] = [];
+          uSnap.forEach(d => uList.push({ id: d.id, ...d.data() } as AppUser));
+          setAllUsers(uList);
+          storeUsers = uList.filter(u => u.businessId === found.id);
+        }
+      } catch (err) {
+        console.warn('Direct users fetch notice:', err);
+      }
+    }
+
     if (storeUsers.length > 0) {
       const defaultOwner = storeUsers.find(u => u.role === 'owner') || storeUsers[0];
       setCurrentUser(defaultOwner);
@@ -318,6 +352,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       setAllUsers(prev => [...prev, newOwner]);
       setCurrentUser(newOwner);
+      try {
+        await setDoc(doc(db, 'users', newOwner.id), sanitizeForFirestore(newOwner));
+      } catch (e) {
+        handleFirestoreError(e, OperationType.CREATE, `users/${newOwner.id}`);
+      }
     }
 
     setActiveTab('pos');
@@ -386,8 +425,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAllUsers(prev => [...prev, newOwner]);
 
     try {
-      await setDoc(doc(db, 'businesses', id), newBusiness);
-      await setDoc(doc(db, 'users', ownerUserId), newOwner);
+      await setDoc(doc(db, 'businesses', id), sanitizeForFirestore(newBusiness));
+      await setDoc(doc(db, 'users', ownerUserId), sanitizeForFirestore(newOwner));
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'businesses');
     }
@@ -406,7 +445,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
-      await updateDoc(doc(db, 'businesses', id), updates);
+      await updateDoc(doc(db, 'businesses', id), sanitizeForFirestore(updates));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `businesses/${id}`);
     }
@@ -481,7 +520,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAllUsers(prev => [...prev, newUser]);
 
     try {
-      await setDoc(doc(db, 'users', id), newUser);
+      await setDoc(doc(db, 'users', id), sanitizeForFirestore(newUser));
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'users');
     }
@@ -499,7 +538,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
-      await updateDoc(doc(db, 'users', userId), updates);
+      await updateDoc(doc(db, 'users', userId), sanitizeForFirestore(updates));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${userId}`);
     }
@@ -653,25 +692,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const batch = writeBatch(db);
             
             initialBusinesses.forEach(b => {
-              batch.set(doc(db, 'businesses', b.id), b);
+              batch.set(doc(db, 'businesses', b.id), sanitizeForFirestore(b));
             });
             initialUsers.forEach(u => {
-              batch.set(doc(db, 'users', u.id), u);
+              batch.set(doc(db, 'users', u.id), sanitizeForFirestore(u));
             });
             initialProducts.forEach(p => {
-              batch.set(doc(db, 'products', p.id), p);
+              batch.set(doc(db, 'products', p.id), sanitizeForFirestore(p));
             });
             initialCustomers.forEach(c => {
-              batch.set(doc(db, 'customers', c.id), c);
+              batch.set(doc(db, 'customers', c.id), sanitizeForFirestore(c));
             });
             initialExpenses.forEach(e => {
-              batch.set(doc(db, 'expenses', e.id), e);
+              batch.set(doc(db, 'expenses', e.id), sanitizeForFirestore(e));
             });
             initialSales.forEach(s => {
-              batch.set(doc(db, 'sales', s.id), s);
+              batch.set(doc(db, 'sales', s.id), sanitizeForFirestore(s));
             });
             initialStockMovements.forEach(sm => {
-              batch.set(doc(db, 'stock_movements', sm.id), sm);
+              batch.set(doc(db, 'stock_movements', sm.id), sanitizeForFirestore(sm));
             });
 
             await batch.commit();
@@ -806,6 +845,90 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubscribeStockMovements?.();
       unsubscribeCustomerPayments?.();
     };
+  }, [isOnline]);
+
+  // Manual / On-demand force sync helper
+  const forceSyncCloudData = useCallback(async () => {
+    if (!isOnline) return;
+    setIsSyncing(true);
+    try {
+      await ensureFirebaseAuth();
+      const [
+        bizSnap,
+        prodSnap,
+        salesSnap,
+        custSnap,
+        custPaySnap,
+        movSnap,
+        expSnap,
+        usersSnap
+      ] = await Promise.all([
+        getDocs(collection(db, 'businesses')),
+        getDocs(collection(db, 'products')),
+        getDocs(collection(db, 'sales')),
+        getDocs(collection(db, 'customers')),
+        getDocs(collection(db, 'customer_payments')),
+        getDocs(collection(db, 'stock_movements')),
+        getDocs(collection(db, 'expenses')),
+        getDocs(collection(db, 'users')),
+      ]);
+
+      if (!bizSnap.empty) {
+        const bList: Business[] = [];
+        bizSnap.forEach(d => bList.push({ id: d.id, ...d.data() } as Business));
+        setAllBusinesses(bList);
+        setBusiness(prev => bList.find(b => b.id === prev.id) || prev);
+      }
+
+      if (!prodSnap.empty) {
+        const pList: Product[] = [];
+        prodSnap.forEach(d => pList.push({ id: d.id, ...d.data() } as Product));
+        setProducts(pList);
+      }
+
+      if (!salesSnap.empty) {
+        const sList: Sale[] = [];
+        salesSnap.forEach(d => sList.push({ id: d.id, ...d.data() } as Sale));
+        setSales(sList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      }
+
+      if (!custSnap.empty) {
+        const cList: Customer[] = [];
+        custSnap.forEach(d => cList.push({ id: d.id, ...d.data() } as Customer));
+        setCustomers(cList);
+      }
+
+      if (!custPaySnap.empty) {
+        const cpList: CustomerPayment[] = [];
+        custPaySnap.forEach(d => cpList.push({ id: d.id, ...d.data() } as CustomerPayment));
+        setCustomerPayments(cpList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      }
+
+      if (!movSnap.empty) {
+        const smList: StockMovement[] = [];
+        movSnap.forEach(d => smList.push({ id: d.id, ...d.data() } as StockMovement));
+        setStockMovements(smList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      }
+
+      if (!expSnap.empty) {
+        const eList: Expense[] = [];
+        expSnap.forEach(d => eList.push({ id: d.id, ...d.data() } as Expense));
+        setExpenses(eList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      }
+
+      if (!usersSnap.empty) {
+        const uList: AppUser[] = [];
+        usersSnap.forEach(d => uList.push({ id: d.id, ...d.data() } as AppUser));
+        setAllUsers(uList);
+        setCurrentUser(prev => uList.find(u => u.id === prev.id) || prev);
+      }
+
+      setLastSyncedAt(new Date());
+    } catch (err) {
+      console.warn('Manual cloud sync notice:', err);
+    } finally {
+      setIsSyncing(false);
+    }
   }, [isOnline]);
 
   // Current Business scoped entities
@@ -1045,27 +1168,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 4. Multi-Device Real-Time Cloud Firestore Sync
     try {
-      await setDoc(doc(db, 'sales', saleId), newSale);
+      await setDoc(doc(db, 'sales', saleId), sanitizeForFirestore(newSale));
       
       for (const p of updatedProducts) {
         const itemInSale = saleItems.find(si => si.productId === p.id);
         if (itemInSale) {
-          await updateDoc(doc(db, 'products', p.id), {
+          await updateDoc(doc(db, 'products', p.id), sanitizeForFirestore({
             currentStock: p.currentStock,
-          });
+          }));
         }
       }
 
       for (const mov of newMovements) {
-        await setDoc(doc(db, 'stock_movements', mov.id), mov);
+        await setDoc(doc(db, 'stock_movements', mov.id), sanitizeForFirestore(mov));
       }
 
       if (customerId && customerCreditIncrement > 0) {
         const currentCust = customers.find(c => c.id === customerId);
         if (currentCust) {
-          await updateDoc(doc(db, 'customers', customerId), {
+          await updateDoc(doc(db, 'customers', customerId), sanitizeForFirestore({
             totalDebt: currentCust.totalDebt + customerCreditIncrement,
-          });
+          }));
         }
       }
     } catch (err) {
@@ -1108,9 +1231,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
-      await setDoc(doc(db, 'products', id), newProduct);
+      await setDoc(doc(db, 'products', id), sanitizeForFirestore(newProduct));
       if (initMov) {
-        await setDoc(doc(db, 'stock_movements', initMov.id), initMov);
+        await setDoc(doc(db, 'stock_movements', initMov.id), sanitizeForFirestore(initMov));
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, `products/${id}`);
@@ -1126,7 +1249,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     try {
-      await updateDoc(doc(db, 'products', id), updates);
+      await updateDoc(doc(db, 'products', id), sanitizeForFirestore(updates));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `products/${id}`);
     }
@@ -1170,7 +1293,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await updateProduct(productId, { currentStock: nextStock });
 
     try {
-      await setDoc(doc(db, 'stock_movements', newMovement.id), newMovement);
+      await setDoc(doc(db, 'stock_movements', newMovement.id), sanitizeForFirestore(newMovement));
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, `stock_movements/${newMovement.id}`);
     }
@@ -1190,7 +1313,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCustomers(prev => [...prev, newCust]);
 
     try {
-      await setDoc(doc(db, 'customers', id), newCust);
+      await setDoc(doc(db, 'customers', id), sanitizeForFirestore(newCust));
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, `customers/${id}`);
     }
@@ -1205,7 +1328,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     try {
-      await updateDoc(doc(db, 'customers', id), updates);
+      await updateDoc(doc(db, 'customers', id), sanitizeForFirestore(updates));
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `customers/${id}`);
     }
@@ -1242,7 +1365,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await updateCustomer(customerId, { totalDebt: newDebt });
 
     try {
-      await setDoc(doc(db, 'customer_payments', paymentId), newPayment);
+      await setDoc(doc(db, 'customer_payments', paymentId), sanitizeForFirestore(newPayment));
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, `customer_payments/${paymentId}`);
     }
@@ -1271,7 +1394,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setExpenses(prev => [newExp, ...prev]);
 
     try {
-      await setDoc(doc(db, 'expenses', id), newExp);
+      await setDoc(doc(db, 'expenses', id), sanitizeForFirestore(newExp));
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, `expenses/${id}`);
     }
@@ -1307,13 +1430,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const batch = writeBatch(db);
-      initialBusinesses.forEach(b => batch.set(doc(db, 'businesses', b.id), b));
-      initialUsers.forEach(u => batch.set(doc(db, 'users', u.id), u));
-      initialProducts.forEach(p => batch.set(doc(db, 'products', p.id), p));
-      initialCustomers.forEach(c => batch.set(doc(db, 'customers', c.id), c));
-      initialExpenses.forEach(e => batch.set(doc(db, 'expenses', e.id), e));
-      initialSales.forEach(s => batch.set(doc(db, 'sales', s.id), s));
-      initialStockMovements.forEach(sm => batch.set(doc(db, 'stock_movements', sm.id), sm));
+      initialBusinesses.forEach(b => batch.set(doc(db, 'businesses', b.id), sanitizeForFirestore(b)));
+      initialUsers.forEach(u => batch.set(doc(db, 'users', u.id), sanitizeForFirestore(u)));
+      initialProducts.forEach(p => batch.set(doc(db, 'products', p.id), sanitizeForFirestore(p)));
+      initialCustomers.forEach(c => batch.set(doc(db, 'customers', c.id), sanitizeForFirestore(c)));
+      initialExpenses.forEach(e => batch.set(doc(db, 'expenses', e.id), sanitizeForFirestore(e)));
+      initialSales.forEach(s => batch.set(doc(db, 'sales', s.id), sanitizeForFirestore(s)));
+      initialStockMovements.forEach(sm => batch.set(doc(db, 'stock_movements', sm.id), sanitizeForFirestore(sm)));
       await batch.commit();
     } catch (e) {
       console.warn('Reset demo batch error:', e);
@@ -1422,6 +1545,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isOnline,
         isSyncing,
         lastSyncedAt,
+        forceSyncCloudData,
         activeTab,
         setActiveTab,
         isPlatformAdminUnlocked,
