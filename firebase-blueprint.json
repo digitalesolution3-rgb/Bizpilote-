@@ -6,16 +6,19 @@
       "type": "object",
       "properties": {
         "name": { "type": "string", "description": "Commercial name of the store" },
+        "accessCode": { "type": "string", "description": "Unique enterprise access code e.g. BF-SONG-2026" },
         "ownerId": { "type": "string", "description": "User ID of the owner" },
+        "ownerName": { "type": "string", "description": "Name of the business owner" },
         "phone": { "type": "string", "description": "Store contact phone" },
         "city": { "type": "string", "description": "City e.g. Ouagadougou, Bobo-Dioulasso" },
         "sector": { "type": "string", "description": "Business activity sector" },
         "ifu": { "type": "string", "description": "IFU tax number if available" },
         "currency": { "type": "string", "description": "Default currency e.g. FCFA" },
         "receiptFooter": { "type": "string", "description": "Custom message on receipts" },
+        "status": { "type": "string", "description": "active or suspended" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["name", "ownerId", "currency"]
+      "required": ["name", "accessCode", "ownerId", "currency"]
     },
     "products": {
       "title": "Product",

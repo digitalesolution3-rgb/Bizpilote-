@@ -12,12 +12,33 @@ import { DashboardView } from './components/dashboard/DashboardView';
 import { SettingsView } from './components/settings/SettingsView';
 import { PlatformAdminView } from './components/admin/PlatformAdminView';
 import { AdminPinModal } from './components/admin/AdminPinModal';
+import { CompanyAccessPortal } from './components/auth/CompanyAccessPortal';
+import { StaffPinModal } from './components/auth/StaffPinModal';
 
 const MainLayout: React.FC = () => {
-  const { activeTab, currentUser, isPlatformAdminUnlocked } = useApp();
+  const { 
+    activeTab, 
+    currentUser, 
+    isPlatformAdminUnlocked, 
+    isBusinessAuthenticated,
+    userToSwitchWithPin,
+    setUserToSwitchWithPin,
+    switchUser
+  } = useApp();
+
+  // If the user hasn't authenticated their business and isn't on the platform admin screen, show company login portal
+  if (!isBusinessAuthenticated && activeTab !== 'admin') {
+    return (
+      <div className="min-h-screen bg-slate-900 font-sans antialiased">
+        <CompanyAccessPortal />
+        <AdminPinModal />
+      </div>
+    );
+  }
 
   const isOwner = currentUser.role === 'owner' || currentUser.role === 'admin';
-  const isStockManager = currentUser.role === 'stock_manager' || isOwner;
+  const isManager = currentUser.role === 'manager' || isOwner;
+  const isStockManager = currentUser.role === 'stock_manager' || isManager;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col text-slate-900 font-sans antialiased selection:bg-blue-600 selection:text-white">
@@ -35,7 +56,7 @@ const MainLayout: React.FC = () => {
           {activeTab === 'stock' && (isStockManager ? <StockView /> : <PosView />)}
           {activeTab === 'customers' && <CustomersView />}
           {activeTab === 'expenses' && <ExpensesView />}
-          {activeTab === 'dashboard' && (isOwner ? <DashboardView /> : <PosView />)}
+          {activeTab === 'dashboard' && (isManager ? <DashboardView /> : <PosView />)}
           {activeTab === 'settings' && (isOwner ? <SettingsView /> : <PosView />)}
           {activeTab === 'admin' && (isPlatformAdminUnlocked ? <PlatformAdminView /> : <PosView />)}
         </main>
@@ -46,6 +67,15 @@ const MainLayout: React.FC = () => {
 
       {/* Master Admin PIN Modal */}
       <AdminPinModal />
+
+      {/* Staff PIN Switch Modal */}
+      <StaffPinModal
+        userToSwitch={userToSwitchWithPin}
+        onClose={() => setUserToSwitchWithPin(null)}
+        onSuccess={(user) => {
+          switchUser(user.id);
+        }}
+      />
     </div>
   );
 };

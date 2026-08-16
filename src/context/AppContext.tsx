@@ -15,9 +15,11 @@ import {
   BusinessSummary,
   StockMovementType,
   ExpenseCategory,
-  NavigationTab
+  NavigationTab,
+  UserPermissions
 } from '../types';
 import { 
+  initialBusinesses,
   initialBusiness, 
   initialUsers, 
   initialProducts, 
@@ -33,6 +35,7 @@ import {
   getDocs, 
   setDoc, 
   updateDoc, 
+  deleteDoc,
   onSnapshot, 
   writeBatch,
   query,
@@ -40,53 +43,35 @@ import {
 } from 'firebase/firestore';
 
 interface AppContextType {
+  // Business Multi-Tenant State
+  allBusinesses: Business[];
   business: Business;
-  currentUser: AppUser;
-  allUsers: AppUser[];
-  products: Product[];
-  sales: Sale[];
-  customers: Customer[];
-  customerPayments: CustomerPayment[];
-  expenses: Expense[];
-  stockMovements: StockMovement[];
-  notifications: NotificationItem[];
-  cart: CartItem[];
-  isOnline: boolean;
-  isSyncing: boolean;
-  lastSyncedAt: Date | null;
-  activeTab: NavigationTab;
-  
-  // Tab & User Switchers
-  setActiveTab: (tab: NavigationTab) => void;
-  switchUser: (userId: string) => void;
+  isBusinessAuthenticated: boolean;
+  authenticateBusiness: (accessCode: string) => { success: boolean; message?: string; business?: Business };
+  logoutBusiness: () => void;
+  createBusiness: (businessData: Omit<Business, 'id' | 'createdAt'>, ownerPin?: string) => Promise<Business>;
+  updateBusiness: (id: string, updates: Partial<Business>) => Promise<void>;
+  deleteBusiness: (id: string) => Promise<void>;
+  regenerateAccessCode: (businessId: string) => Promise<string>;
+  switchBusiness: (businessId: string) => void;
   updateBusinessProfile: (updates: Partial<Business>) => Promise<void>;
 
-  // Platform Admin (Triple Click & Master PIN 761278)
-  isPlatformAdminUnlocked: boolean;
-  showAdminPinModal: boolean;
-  setShowAdminPinModal: (show: boolean) => void;
-  unlockPlatformAdmin: (pin: string) => boolean;
-  lockPlatformAdmin: () => void;
-  handleLogoClick: () => void;
+  // User & Staff Management (Owner -> Cashier/Manager)
+  currentUser: AppUser;
+  allUsers: AppUser[];
+  switchUser: (userId: string) => void;
+  userToSwitchWithPin: AppUser | null;
+  setUserToSwitchWithPin: (user: AppUser | null) => void;
+  requestUserSwitch: (userId: string) => void;
+  addUser: (userData: Omit<AppUser, 'id' | 'businessId' | 'createdAt' | 'active'>) => Promise<AppUser>;
+  updateUser: (userId: string, updates: Partial<AppUser>) => Promise<void>;
+  updateUserPin: (userId: string, newPin: string) => Promise<void>;
+  toggleUserStatus: (userId: string) => Promise<void>;
+  deleteUser: (userId: string) => Promise<void>;
+  verifyUserPin: (userId: string, pin: string) => boolean;
 
-  // Cart operations
-  addToCart: (product: Product, quantity?: number) => void;
-  updateCartQuantity: (productId: string, quantity: number) => void;
-  updateCartItemDiscount: (productId: string, discount: number) => void;
-  removeFromCart: (productId: string) => void;
-  clearCart: () => void;
-  
-  // Transaction operations
-  completeSale: (
-    paymentMethod: PaymentMethod,
-    customerId?: string,
-    customerName?: string,
-    overallDiscount?: number,
-    splitDetails?: { cash?: number; orangeMoney?: number; moovMoney?: number; waveCoris?: number; credit?: number; },
-    notes?: string
-  ) => Promise<Sale>;
-
-  // Product & Stock operations
+  // Products & Inventory
+  products: Product[];
   addProduct: (productData: Omit<Product, 'id' | 'businessId' | 'createdAt'>) => Promise<Product>;
   updateProduct: (id: string, updates: Partial<Product>) => Promise<void>;
   archiveProduct: (id: string) => Promise<void>;
@@ -96,8 +81,28 @@ interface AppContextType {
     quantity: number,
     reason: string
   ) => Promise<void>;
+  stockMovements: StockMovement[];
 
-  // Customer & Credit operations
+  // Sales & Cart
+  sales: Sale[];
+  cart: CartItem[];
+  addToCart: (product: Product, quantity?: number) => void;
+  updateCartQuantity: (productId: string, quantity: number) => void;
+  updateCartItemDiscount: (productId: string, discount: number) => void;
+  removeFromCart: (productId: string) => void;
+  clearCart: () => void;
+  completeSale: (
+    paymentMethod: PaymentMethod,
+    customerId?: string,
+    customerName?: string,
+    overallDiscount?: number,
+    splitDetails?: { cash?: number; orangeMoney?: number; moovMoney?: number; waveCoris?: number; credit?: number; },
+    notes?: string
+  ) => Promise<Sale>;
+
+  // Customers & Debts
+  customers: Customer[];
+  customerPayments: CustomerPayment[];
   addCustomer: (customerData: Omit<Customer, 'id' | 'businessId' | 'createdAt' | 'totalDebt'>) => Promise<Customer>;
   updateCustomer: (id: string, updates: Partial<Customer>) => Promise<void>;
   recordCustomerPayment: (
@@ -107,7 +112,8 @@ interface AppContextType {
     notes?: string
   ) => Promise<void>;
 
-  // Expense operations
+  // Expenses
+  expenses: Expense[];
   addExpense: (expenseData: {
     category: ExpenseCategory;
     customCategory?: string;
@@ -117,11 +123,21 @@ interface AppContextType {
     notes?: string;
   }) => Promise<Expense>;
 
-  // User management
-  addUser: (userData: Omit<AppUser, 'id' | 'businessId' | 'createdAt' | 'active'>) => Promise<AppUser>;
-  toggleUserStatus: (id: string) => Promise<void>;
+  // Navigation & Platform Admin
+  activeTab: NavigationTab;
+  setActiveTab: (tab: NavigationTab) => void;
+  isPlatformAdminUnlocked: boolean;
+  showAdminPinModal: boolean;
+  setShowAdminPinModal: (show: boolean) => void;
+  unlockPlatformAdmin: (pin: string) => boolean;
+  lockPlatformAdmin: () => void;
+  handleLogoClick: () => void;
 
-  // Metrics & Notifications
+  // System, Sync & Telemetry
+  isOnline: boolean;
+  isSyncing: boolean;
+  lastSyncedAt: Date | null;
+  notifications: NotificationItem[];
   summary: BusinessSummary;
   markNotificationAsRead: (id: string) => void;
   clearAllNotifications: () => void;
@@ -130,7 +146,8 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const LOCAL_STORAGE_KEY = 'bizpilot_burkina_v1';
+const LOCAL_STORAGE_KEY = 'bizpilot_burkina_v2';
+const PLATFORM_ADMIN_PIN = '761278';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Load saved state or fallback
@@ -148,17 +165,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const initialCached = getInitialStorage();
 
-  const [business, setBusiness] = useState<Business>(initialCached?.business || initialBusiness);
-  const [allUsers, setAllUsers] = useState<AppUser[]>(initialCached?.allUsers || initialUsers);
-  const [currentUser, setCurrentUser] = useState<AppUser>(
-    initialCached?.currentUser || initialUsers.find(u => u.role === 'owner') || initialUsers[0]
+  // Multi-Business States
+  const [allBusinesses, setAllBusinesses] = useState<Business[]>(
+    initialCached?.allBusinesses || initialBusinesses
   );
-  const [products, setProducts] = useState<Product[]>(initialCached?.products || initialProducts);
-  const [sales, setSales] = useState<Sale[]>(initialCached?.sales || initialSales);
-  const [customers, setCustomers] = useState<Customer[]>(initialCached?.customers || initialCustomers);
-  const [customerPayments, setCustomerPayments] = useState<CustomerPayment[]>(initialCached?.customerPayments || []);
-  const [expenses, setExpenses] = useState<Expense[]>(initialCached?.expenses || initialExpenses);
-  const [stockMovements, setStockMovements] = useState<StockMovement[]>(initialCached?.stockMovements || initialStockMovements);
+  
+  const [business, setBusiness] = useState<Business>(
+    initialCached?.business || initialBusinesses[0]
+  );
+
+  const [isBusinessAuthenticated, setIsBusinessAuthenticated] = useState<boolean>(
+    initialCached?.isBusinessAuthenticated ?? true
+  );
+
+  // Global Multi-tenant Dataset
+  const [allUsers, setAllUsers] = useState<AppUser[]>(
+    initialCached?.allUsers || initialUsers
+  );
+
+  const [currentUser, setCurrentUser] = useState<AppUser>(
+    initialCached?.currentUser || initialUsers[0]
+  );
+
+  const [products, setProducts] = useState<Product[]>(
+    initialCached?.products || initialProducts
+  );
+  const [sales, setSales] = useState<Sale[]>(
+    initialCached?.sales || initialSales
+  );
+  const [customers, setCustomers] = useState<Customer[]>(
+    initialCached?.customers || initialCustomers
+  );
+  const [customerPayments, setCustomerPayments] = useState<CustomerPayment[]>(
+    initialCached?.customerPayments || []
+  );
+  const [expenses, setExpenses] = useState<Expense[]>(
+    initialCached?.expenses || initialExpenses
+  );
+  const [stockMovements, setStockMovements] = useState<StockMovement[]>(
+    initialCached?.stockMovements || initialStockMovements
+  );
+
   const [cart, setCart] = useState<CartItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [activeTab, setActiveTab] = useState<NavigationTab>('pos');
@@ -166,13 +213,300 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
   
+  // Staff PIN verification modal
+  const [userToSwitchWithPin, setUserToSwitchWithPin] = useState<AppUser | null>(null);
+
   // Platform Admin state
   const [isPlatformAdminUnlocked, setIsPlatformAdminUnlocked] = useState<boolean>(false);
   const [showAdminPinModal, setShowAdminPinModal] = useState<boolean>(false);
   const logoClicksRef = React.useRef<{ count: number; timer: NodeJS.Timeout | null }>({ count: 0, timer: null });
 
-  const PLATFORM_ADMIN_PIN = '761278';
+  // 1. Authenticate Business by Access Code
+  const authenticateBusiness = useCallback((rawCode: string) => {
+    const code = rawCode.trim().toUpperCase();
+    const found = allBusinesses.find(b => 
+      (b.accessCode && b.accessCode.toUpperCase() === code) ||
+      b.id.toUpperCase() === code
+    );
 
+    if (!found) {
+      return { 
+        success: false, 
+        message: `Code d'accès "${code}" non trouvé. Veuillez vérifier auprès de l'administrateur.` 
+      };
+    }
+
+    if (found.status === 'suspended') {
+      return { 
+        success: false, 
+        message: `L'entreprise "${found.name}" a été suspendue par l'administrateur de la plateforme.` 
+      };
+    }
+
+    // Set active store
+    setBusiness(found);
+    setIsBusinessAuthenticated(true);
+
+    // Switch to first owner/manager of this business
+    const storeUsers = allUsers.filter(u => u.businessId === found.id);
+    if (storeUsers.length > 0) {
+      const defaultOwner = storeUsers.find(u => u.role === 'owner') || storeUsers[0];
+      setCurrentUser(defaultOwner);
+    } else {
+      // Create default owner for this business
+      const newOwner: AppUser = {
+        id: `usr_${Date.now()}`,
+        businessId: found.id,
+        name: found.ownerName || 'Propriétaire',
+        phone: found.phone,
+        role: 'owner',
+        pin: '1234',
+        active: true,
+        permissions: {
+          canAccessPos: true,
+          canAccessStock: true,
+          canAccessCustomers: true,
+          canAccessExpenses: true,
+          canAccessReports: true,
+          canGiveDiscount: true,
+          canManageUsers: true,
+        },
+        createdAt: new Date().toISOString(),
+      };
+      setAllUsers(prev => [...prev, newOwner]);
+      setCurrentUser(newOwner);
+    }
+
+    setActiveTab('pos');
+    return { success: true, business: found };
+  }, [allBusinesses, allUsers]);
+
+  // Logout from current business
+  const logoutBusiness = useCallback(() => {
+    setIsBusinessAuthenticated(false);
+    setCart([]);
+  }, []);
+
+  // Switch business directly (Super Admin helper)
+  const switchBusiness = useCallback((businessId: string) => {
+    const found = allBusinesses.find(b => b.id === businessId);
+    if (found) {
+      setBusiness(found);
+      setIsBusinessAuthenticated(true);
+      const storeUsers = allUsers.filter(u => u.businessId === found.id);
+      if (storeUsers.length > 0) {
+        setCurrentUser(storeUsers.find(u => u.role === 'owner') || storeUsers[0]);
+      }
+    }
+  }, [allBusinesses, allUsers]);
+
+  // Create New Business in Admin Console
+  const createBusiness = async (
+    businessData: Omit<Business, 'id' | 'createdAt'>,
+    ownerPin = '1234'
+  ): Promise<Business> => {
+    const id = `biz_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 4)}`;
+    const nowIso = new Date().toISOString();
+
+    const finalAccessCode = (businessData.accessCode || `BF-${businessData.name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`).toUpperCase();
+
+    const newBusiness: Business = {
+      ...businessData,
+      id,
+      accessCode: finalAccessCode,
+      createdAt: nowIso,
+    };
+
+    // Create Initial Owner for this business
+    const ownerUserId = `usr_${Date.now().toString(36)}`;
+    const newOwner: AppUser = {
+      id: ownerUserId,
+      businessId: id,
+      name: businessData.ownerName || 'Propriétaire',
+      phone: businessData.phone,
+      role: 'owner',
+      pin: ownerPin,
+      active: true,
+      permissions: {
+        canAccessPos: true,
+        canAccessStock: true,
+        canAccessCustomers: true,
+        canAccessExpenses: true,
+        canAccessReports: true,
+        canGiveDiscount: true,
+        canManageUsers: true,
+      },
+      createdAt: nowIso,
+    };
+
+    setAllBusinesses(prev => [newBusiness, ...prev]);
+    setAllUsers(prev => [...prev, newOwner]);
+
+    if (isOnline) {
+      try {
+        await setDoc(doc(db, 'businesses', id), newBusiness);
+        await setDoc(doc(db, 'users', ownerUserId), newOwner);
+      } catch (err) {
+        console.warn('Firestore offline fallback for create business:', err);
+      }
+    }
+
+    return newBusiness;
+  };
+
+  // Update Business
+  const updateBusiness = async (id: string, updates: Partial<Business>) => {
+    setAllBusinesses(prev =>
+      prev.map(b => (b.id === id ? { ...b, ...updates } : b))
+    );
+
+    if (business.id === id) {
+      setBusiness(prev => ({ ...prev, ...updates }));
+    }
+
+    if (isOnline) {
+      try {
+        await updateDoc(doc(db, 'businesses', id), updates);
+      } catch (err) {
+        console.warn('Firestore update business error:', err);
+      }
+    }
+  };
+
+  // Delete Business
+  const deleteBusiness = async (id: string) => {
+    setAllBusinesses(prev => prev.filter(b => b.id !== id));
+    if (business.id === id) {
+      const remaining = allBusinesses.filter(b => b.id !== id);
+      if (remaining.length > 0) {
+        setBusiness(remaining[0]);
+      } else {
+        setIsBusinessAuthenticated(false);
+      }
+    }
+
+    if (isOnline) {
+      try {
+        await deleteDoc(doc(db, 'businesses', id));
+      } catch (err) {
+        console.warn('Firestore delete business error:', err);
+      }
+    }
+  };
+
+  // Regenerate Access Code for a store
+  const regenerateAccessCode = async (businessId: string): Promise<string> => {
+    const target = allBusinesses.find(b => b.id === businessId);
+    const prefix = target ? target.name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase() : 'FASO';
+    const newCode = `BF-${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    await updateBusiness(businessId, { accessCode: newCode });
+    return newCode;
+  };
+
+  // Switch active user
+  const switchUser = (userId: string) => {
+    const found = allUsers.find(u => u.id === userId);
+    if (found) {
+      if (!found.active) {
+        alert("Ce compte est suspendu par le propriétaire.");
+        return;
+      }
+      setCurrentUser(found);
+    }
+  };
+
+  // Request user switch with PIN prompt
+  const requestUserSwitch = (userId: string) => {
+    const found = allUsers.find(u => u.id === userId);
+    if (found) {
+      setUserToSwitchWithPin(found);
+    }
+  };
+
+  // Verify User PIN
+  const verifyUserPin = (userId: string, pin: string): boolean => {
+    const found = allUsers.find(u => u.id === userId);
+    return found ? (found.pin === pin || (!found.pin && pin === '0000')) : false;
+  };
+
+  // User Management by Owner
+  const addUser = async (userData: Omit<AppUser, 'id' | 'businessId' | 'createdAt' | 'active'>): Promise<AppUser> => {
+    const id = `usr_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 3)}`;
+    const newUser: AppUser = {
+      ...userData,
+      id,
+      businessId: business.id,
+      active: true,
+      createdAt: new Date().toISOString(),
+    };
+
+    setAllUsers(prev => [...prev, newUser]);
+
+    if (isOnline) {
+      try {
+        await setDoc(doc(db, 'users', id), newUser);
+      } catch (err) {
+        console.warn('Firestore add user error:', err);
+      }
+    }
+
+    return newUser;
+  };
+
+  const updateUser = async (userId: string, updates: Partial<AppUser>) => {
+    setAllUsers(prev =>
+      prev.map(u => (u.id === userId ? { ...u, ...updates } : u))
+    );
+
+    if (currentUser.id === userId) {
+      setCurrentUser(prev => ({ ...prev, ...updates }));
+    }
+
+    if (isOnline) {
+      try {
+        await updateDoc(doc(db, 'users', userId), updates);
+      } catch (err) {
+        console.warn('Firestore update user error:', err);
+      }
+    }
+  };
+
+  const updateUserPin = async (userId: string, newPin: string) => {
+    await updateUser(userId, { pin: newPin });
+  };
+
+  const toggleUserStatus = async (id: string) => {
+    const target = allUsers.find(u => u.id === id);
+    if (!target) return;
+    const newStatus = !target.active;
+    await updateUser(id, { active: newStatus });
+  };
+
+  const deleteUser = async (id: string) => {
+    setAllUsers(prev => prev.filter(u => u.id !== id));
+    if (currentUser.id === id) {
+      const remaining = allUsers.filter(u => u.id !== id && u.businessId === business.id);
+      if (remaining.length > 0) {
+        setCurrentUser(remaining[0]);
+      }
+    }
+
+    if (isOnline) {
+      try {
+        await deleteDoc(doc(db, 'users', id));
+      } catch (err) {
+        console.warn('Firestore delete user error:', err);
+      }
+    }
+  };
+
+  // Update business profile
+  const updateBusinessProfile = async (updates: Partial<Business>) => {
+    await updateBusiness(business.id, updates);
+  };
+
+  // Platform Admin PIN Unlock
   const unlockPlatformAdmin = useCallback((pin: string): boolean => {
     if (pin.trim() === PLATFORM_ADMIN_PIN) {
       setIsPlatformAdminUnlocked(true);
@@ -212,7 +546,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Save to localStorage whenever core state updates
   useEffect(() => {
     const dataToSave = {
+      allBusinesses,
       business,
+      isBusinessAuthenticated,
       allUsers,
       currentUser,
       products,
@@ -227,7 +563,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('LocalStorage limit reached or disabled:', err);
     }
-  }, [business, allUsers, currentUser, products, sales, customers, customerPayments, expenses, stockMovements]);
+  }, [
+    allBusinesses, 
+    business, 
+    isBusinessAuthenticated, 
+    allUsers, 
+    currentUser, 
+    products, 
+    sales, 
+    customers, 
+    customerPayments, 
+    expenses, 
+    stockMovements
+  ]);
 
   // Online / Offline monitor
   useEffect(() => {
@@ -246,15 +594,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (!isOnline) return;
 
+    let unsubscribeBusinesses: (() => void) | undefined;
     let unsubscribeProducts: (() => void) | undefined;
     let unsubscribeSales: (() => void) | undefined;
     let unsubscribeCustomers: (() => void) | undefined;
     let unsubscribeExpenses: (() => void) | undefined;
+    let unsubscribeUsers: (() => void) | undefined;
 
     const setupFirestoreSync = async () => {
       try {
         setIsSyncing(true);
-        // Products listener
+
+        // 1. Businesses listener
+        const bizCol = collection(db, 'businesses');
+        unsubscribeBusinesses = onSnapshot(bizCol, (snapshot) => {
+          if (!snapshot.empty) {
+            const list: Business[] = [];
+            snapshot.forEach(docSnap => {
+              list.push({ id: docSnap.id, ...docSnap.data() } as Business);
+            });
+            if (list.length > 0) {
+              setAllBusinesses(list);
+              const currentUpdated = list.find(b => b.id === business.id);
+              if (currentUpdated) setBusiness(currentUpdated);
+            }
+          }
+        }, (err) => console.log('Businesses snapshot fallback:', err.message));
+
+        // 2. Products listener
         const prodCol = collection(db, 'products');
         unsubscribeProducts = onSnapshot(prodCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -264,9 +631,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             setProducts(list);
           }
-        }, (err) => console.log('Firestore snapshot fallback:', err.message));
+        }, (err) => console.log('Products snapshot fallback:', err.message));
 
-        // Sales listener
+        // 3. Sales listener
         const salesCol = collection(db, 'sales');
         unsubscribeSales = onSnapshot(salesCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -276,9 +643,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             setSales(list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
           }
-        }, (err) => console.log('Firestore snapshot fallback:', err.message));
+        }, (err) => console.log('Sales snapshot fallback:', err.message));
 
-        // Customers listener
+        // 4. Customers listener
         const custCol = collection(db, 'customers');
         unsubscribeCustomers = onSnapshot(custCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -288,9 +655,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             setCustomers(list);
           }
-        }, (err) => console.log('Firestore snapshot fallback:', err.message));
+        }, (err) => console.log('Customers snapshot fallback:', err.message));
 
-        // Expenses listener
+        // 5. Expenses listener
         const expCol = collection(db, 'expenses');
         unsubscribeExpenses = onSnapshot(expCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -300,7 +667,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             setExpenses(list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
           }
-        }, (err) => console.log('Firestore snapshot fallback:', err.message));
+        }, (err) => console.log('Expenses snapshot fallback:', err.message));
+
+        // 6. Users listener
+        const usersCol = collection(db, 'users');
+        unsubscribeUsers = onSnapshot(usersCol, (snapshot) => {
+          if (!snapshot.empty) {
+            const list: AppUser[] = [];
+            snapshot.forEach(docSnap => {
+              list.push({ id: docSnap.id, ...docSnap.data() } as AppUser);
+            });
+            setAllUsers(list);
+          }
+        }, (err) => console.log('Users snapshot fallback:', err.message));
 
         setLastSyncedAt(new Date());
         setIsSyncing(false);
@@ -313,19 +692,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setupFirestoreSync();
 
     return () => {
+      unsubscribeBusinesses?.();
       unsubscribeProducts?.();
       unsubscribeSales?.();
       unsubscribeCustomers?.();
       unsubscribeExpenses?.();
+      unsubscribeUsers?.();
     };
-  }, [isOnline]);
+  }, [isOnline, business.id]);
+
+  // Current Business scoped entities
+  const scopedProducts = useMemo(() => 
+    products.filter(p => p.businessId === business.id),
+    [products, business.id]
+  );
+
+  const scopedSales = useMemo(() => 
+    sales.filter(s => s.businessId === business.id),
+    [sales, business.id]
+  );
+
+  const scopedCustomers = useMemo(() => 
+    customers.filter(c => c.businessId === business.id),
+    [customers, business.id]
+  );
+
+  const scopedCustomerPayments = useMemo(() => 
+    customerPayments.filter(cp => cp.businessId === business.id),
+    [customerPayments, business.id]
+  );
+
+  const scopedExpenses = useMemo(() => 
+    expenses.filter(e => e.businessId === business.id),
+    [expenses, business.id]
+  );
+
+  const scopedStockMovements = useMemo(() => 
+    stockMovements.filter(sm => sm.businessId === business.id),
+    [stockMovements, business.id]
+  );
+
+  const scopedUsers = useMemo(() => 
+    allUsers.filter(u => u.businessId === business.id),
+    [allUsers, business.id]
+  );
 
   // Generate automated alerts for stock and overdue debts
   useEffect(() => {
     const alerts: NotificationItem[] = [];
 
     // Stock alerts
-    products.forEach(p => {
+    scopedProducts.forEach(p => {
       if (!p.archived) {
         if (p.currentStock <= 0) {
           alerts.push({
@@ -353,7 +770,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Overdue credit alerts
     const todayStr = new Date().toISOString().split('T')[0];
-    customers.forEach(c => {
+    scopedCustomers.forEach(c => {
       if (c.totalDebt > 0 && c.dueDate && c.dueDate < todayStr) {
         alerts.push({
           id: `notif_debt_overdue_${c.id}`,
@@ -368,28 +785,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     setNotifications(alerts);
-  }, [products, customers, business.currency]);
-
-  // Switch active user
-  const switchUser = (userId: string) => {
-    const found = allUsers.find(u => u.id === userId);
-    if (found) {
-      setCurrentUser(found);
-    }
-  };
-
-  // Update business profile
-  const updateBusinessProfile = async (updates: Partial<Business>) => {
-    const updated = { ...business, ...updates };
-    setBusiness(updated);
-    if (isOnline) {
-      try {
-        await setDoc(doc(db, 'businesses', business.id), updated, { merge: true });
-      } catch (err) {
-        console.warn('Could not sync business profile to cloud:', err);
-      }
-    }
-  };
+  }, [scopedProducts, scopedCustomers, business.currency]);
 
   // Cart operations
   const addToCart = (product: Product, quantity = 1) => {
@@ -467,7 +863,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const totalCost = saleItems.reduce((acc, curr) => acc + curr.totalCost, 0);
     const profit = total - totalCost;
 
-    const receiptNumber = `BZ-${new Date().getFullYear()}-${String(sales.length + 1).padStart(3, '0')}`;
+    const receiptNumber = `BZ-${new Date().getFullYear()}-${String(scopedSales.length + 1).padStart(3, '0')}`;
     const saleId = `sale_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const nowIso = new Date().toISOString();
 
@@ -543,8 +939,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (isOnline) {
       try {
         await setDoc(doc(db, 'sales', saleId), newSale);
-        
-        // Update product stocks in firestore
         for (const p of updatedProducts) {
           const itemInSale = saleItems.find(si => si.productId === p.id);
           if (itemInSale) {
@@ -574,7 +968,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setProducts(prev => [newProduct, ...prev]);
 
-    // Initial stock movement
     if (newProduct.currentStock > 0) {
       const initMov: StockMovement = {
         id: `mov_${Date.now()}_init`,
@@ -619,12 +1012,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Archive Product (Safe delete preventing broken sales history)
+  // Archive Product
   const archiveProduct = async (id: string) => {
     await updateProduct(id, { archived: true });
   };
 
-  // Record manual stock movement (In, Out, Damage, Adjustment)
+  // Record Stock Movement
   const recordStockMovement = async (
     productId: string,
     type: StockMovementType,
@@ -776,27 +1169,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newExp;
   };
 
-  // Add User
-  const addUser = async (userData: Omit<AppUser, 'id' | 'businessId' | 'createdAt' | 'active'>): Promise<AppUser> => {
-    const id = `usr_${Date.now()}`;
-    const newUser: AppUser = {
-      ...userData,
-      id,
-      businessId: business.id,
-      active: true,
-      createdAt: new Date().toISOString(),
-    };
-
-    setAllUsers(prev => [...prev, newUser]);
-    return newUser;
-  };
-
-  const toggleUserStatus = async (id: string) => {
-    setAllUsers(prev =>
-      prev.map(u => (u.id === id ? { ...u, active: !u.active } : u))
-    );
-  };
-
   const markNotificationAsRead = (id: string) => {
     setNotifications(prev =>
       prev.map(n => (n.id === id ? { ...n, read: true } : n))
@@ -809,7 +1181,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Reset to sample Burkina demo dataset
   const resetToDemoData = async () => {
-    setBusiness(initialBusiness);
+    setAllBusinesses(initialBusinesses);
+    setBusiness(initialBusinesses[0]);
+    setIsBusinessAuthenticated(true);
     setAllUsers(initialUsers);
     setCurrentUser(initialUsers[0]);
     setProducts(initialProducts);
@@ -822,7 +1196,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.removeItem(LOCAL_STORAGE_KEY);
   };
 
-  // Compute live Business Summary
+  // Compute live Business Summary for current scoped business
   const summary: BusinessSummary = useMemo(() => {
     const todayStr = new Date().toISOString().split('T')[0];
     const sevenDaysAgo = new Date();
@@ -837,7 +1211,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let monthSales = 0;
     let monthProfit = 0;
 
-    sales.forEach(sale => {
+    scopedSales.forEach(sale => {
       const saleDate = new Date(sale.createdAt);
       const saleDateStr = sale.createdAt.split('T')[0];
 
@@ -857,7 +1231,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     let todayExpenses = 0;
     let monthExpenses = 0;
-    expenses.forEach(exp => {
+    scopedExpenses.forEach(exp => {
       const expDate = new Date(exp.createdAt);
       const expDateStr = exp.createdAt.split('T')[0];
       if (expDateStr === todayStr) {
@@ -868,9 +1242,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    const totalPendingDebts = customers.reduce((acc, c) => acc + (c.totalDebt || 0), 0);
-    const lowStockCount = products.filter(p => !p.archived && p.currentStock > 0 && p.currentStock <= p.alertThreshold).length;
-    const outOfStockCount = products.filter(p => !p.archived && p.currentStock <= 0).length;
+    const totalPendingDebts = scopedCustomers.reduce((acc, c) => acc + (c.totalDebt || 0), 0);
+    const lowStockCount = scopedProducts.filter(p => !p.archived && p.currentStock > 0 && p.currentStock <= p.alertThreshold).length;
+    const outOfStockCount = scopedProducts.filter(p => !p.archived && p.currentStock <= 0).length;
 
     return {
       todaySales,
@@ -885,20 +1259,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       lowStockCount,
       outOfStockCount,
     };
-  }, [sales, expenses, customers, products]);
+  }, [scopedSales, scopedExpenses, scopedCustomers, scopedProducts]);
 
   return (
     <AppContext.Provider
       value={{
+        allBusinesses,
         business,
+        isBusinessAuthenticated,
+        authenticateBusiness,
+        logoutBusiness,
+        createBusiness,
+        updateBusiness,
+        deleteBusiness,
+        regenerateAccessCode,
+        switchBusiness,
+        updateBusinessProfile,
         currentUser,
-        allUsers,
-        products,
-        sales,
-        customers,
-        customerPayments,
-        expenses,
-        stockMovements,
+        allUsers: scopedUsers,
+        switchUser,
+        userToSwitchWithPin,
+        setUserToSwitchWithPin,
+        requestUserSwitch,
+        addUser,
+        updateUser,
+        updateUserPin,
+        toggleUserStatus,
+        deleteUser,
+        verifyUserPin,
+        products: scopedProducts,
+        sales: scopedSales,
+        customers: scopedCustomers,
+        customerPayments: scopedCustomerPayments,
+        expenses: scopedExpenses,
+        stockMovements: scopedStockMovements,
         notifications,
         cart,
         isOnline,
@@ -906,8 +1300,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         lastSyncedAt,
         activeTab,
         setActiveTab,
-        switchUser,
-        updateBusinessProfile,
         isPlatformAdminUnlocked,
         showAdminPinModal,
         setShowAdminPinModal,
@@ -928,8 +1320,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateCustomer,
         recordCustomerPayment,
         addExpense,
-        addUser,
-        toggleUserStatus,
         summary,
         markNotificationAsRead,
         clearAllNotifications,

@@ -12,7 +12,10 @@ import {
   AlertTriangle, 
   XCircle,
   Sparkles,
-  ShieldCheck
+  ShieldCheck,
+  Building2,
+  LogOut,
+  KeyRound
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
@@ -20,7 +23,9 @@ export const Navbar: React.FC = () => {
     business, 
     currentUser, 
     allUsers, 
+    requestUserSwitch,
     switchUser, 
+    logoutBusiness,
     isOnline, 
     isSyncing, 
     notifications, 
@@ -41,13 +46,15 @@ export const Navbar: React.FC = () => {
   const getRoleBadge = (role: string) => {
     switch (role) {
       case 'owner':
-        return <span className="bg-amber-50 text-amber-800 border border-amber-200 text-xs font-semibold px-2 py-0.5 rounded-md">Propriétaire</span>;
+        return <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">Propriétaire</span>;
+      case 'manager':
+        return <span className="bg-purple-50 text-purple-800 border border-purple-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">Gérant</span>;
       case 'cashier':
-        return <span className="bg-blue-50 text-blue-800 border border-blue-200 text-xs font-semibold px-2 py-0.5 rounded-md">Vendeur / Caisse</span>;
+        return <span className="bg-blue-50 text-blue-800 border border-blue-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">Caissier</span>;
       case 'stock_manager':
-        return <span className="bg-indigo-50 text-indigo-800 border border-indigo-200 text-xs font-semibold px-2 py-0.5 rounded-md">Stock</span>;
+        return <span className="bg-indigo-50 text-indigo-800 border border-indigo-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">Stock</span>;
       default:
-        return <span className="bg-slate-100 text-slate-700 text-xs px-2 py-0.5 rounded-md">{role}</span>;
+        return <span className="bg-slate-100 text-slate-700 text-[10px] px-2 py-0.5 rounded-md">{role}</span>;
     }
   };
 
@@ -70,8 +77,8 @@ export const Navbar: React.FC = () => {
                 <span className="font-bold text-slate-900 text-base sm:text-lg tracking-tight group-hover:text-blue-600 transition">
                   BizPilot <span className="text-blue-600 font-extrabold">BF</span>
                 </span>
-                <span className="hidden md:inline-flex items-center px-2 py-0.5 text-xs font-semibold bg-slate-100 text-slate-700 rounded border border-slate-200">
-                  {business.currency}
+                <span className="font-mono text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-md">
+                  {business.accessCode}
                 </span>
                 {isPlatformAdminUnlocked && (
                   <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-extrabold bg-blue-600 text-white px-2 py-0.5 rounded-full shadow-xs">
@@ -80,7 +87,7 @@ export const Navbar: React.FC = () => {
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-500 truncate max-w-[200px] sm:max-w-xs">
+              <p className="text-xs text-slate-500 truncate max-w-[180px] sm:max-w-xs">
                 {business.name} • {business.city.split('(')[0].trim()}
               </p>
             </div>
@@ -93,7 +100,7 @@ export const Navbar: React.FC = () => {
               {isOnline ? (
                 <div 
                   className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default"
-                  title={isSyncing ? "Synchronisation Firestore en cours..." : "Connecté à Firestore (Prêt hors-ligne)"}
+                  title={isSyncing ? "Synchronisation Firestore en cours..." : "Connecté à Firestore Cloud (Prêt hors-ligne)"}
                 >
                   <Wifi className="h-3.5 w-3.5 text-emerald-600" />
                   <span className="hidden sm:inline">
@@ -116,7 +123,7 @@ export const Navbar: React.FC = () => {
               <button
                 id="btn-notifications"
                 onClick={() => setShowNotifDropdown(!showNotifDropdown)}
-                className="p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 relative transition-colors focus:outline-none"
+                className="p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 relative transition-colors focus:outline-none cursor-pointer"
                 aria-label="Notifications"
               >
                 <Bell className="h-5 w-5" />
@@ -135,7 +142,7 @@ export const Navbar: React.FC = () => {
                     {unreadNotifs.length > 0 && (
                       <button
                         onClick={clearAllNotifications}
-                        className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                        className="text-xs text-blue-600 hover:text-blue-700 font-medium cursor-pointer"
                       >
                         Tout effacer
                       </button>
@@ -182,7 +189,7 @@ export const Navbar: React.FC = () => {
             <button
               id="nav-quick-pos-btn"
               onClick={() => setActiveTab('pos')}
-              className="hidden sm:inline-flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-3.5 py-2 rounded-lg text-sm font-semibold shadow-xs transition-all"
+              className="hidden sm:inline-flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-3.5 py-2 rounded-lg text-sm font-semibold shadow-xs transition-all cursor-pointer"
             >
               <PlusCircle className="h-4 w-4" />
               <span>Caisse Vente</span>
@@ -198,14 +205,14 @@ export const Navbar: React.FC = () => {
               <button
                 id="btn-user-menu"
                 onClick={() => setShowUserDropdown(!showUserDropdown)}
-                className="flex items-center space-x-2 bg-slate-100 hover:bg-slate-200/80 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-slate-800 transition focus:outline-none"
+                className="flex items-center space-x-2 bg-slate-100 hover:bg-slate-200/80 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-slate-800 transition focus:outline-none cursor-pointer"
               >
                 <div className="h-6 w-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs font-bold uppercase">
                   {currentUser.name.charAt(0)}
                 </div>
                 <div className="hidden md:flex flex-col text-left">
                   <span className="font-semibold text-slate-900 leading-tight">{currentUser.name.split(' ')[0]}</span>
-                  <span className="text-[10px] text-slate-500 capitalize">{currentUser.role === 'owner' ? 'Propriétaire' : currentUser.role === 'cashier' ? 'Caissier' : 'Stock'}</span>
+                  <span className="text-[10px] text-slate-500 capitalize">{currentUser.role === 'owner' ? 'Propriétaire' : currentUser.role === 'manager' ? 'Gérant' : currentUser.role === 'cashier' ? 'Caissier' : 'Stock'}</span>
                 </div>
                 <ChevronDown className="h-3.5 w-3.5 text-slate-500" />
               </button>
@@ -215,23 +222,23 @@ export const Navbar: React.FC = () => {
                 <div className="origin-top-right absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 animate-in fade-in zoom-in-95 duration-100">
                   <div className="px-3 py-2 border-b border-slate-100">
                     <p className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Changer de Profil</p>
-                    <p className="text-xs text-slate-600">Simulez les rôles de l'entreprise :</p>
+                    <p className="text-xs text-slate-600">Sélectionnez votre compte :</p>
                   </div>
                   <div className="p-1 space-y-1">
                     {allUsers.map(user => (
                       <button
                         key={user.id}
                         onClick={() => {
-                          switchUser(user.id);
+                          requestUserSwitch(user.id);
                           setShowUserDropdown(false);
                         }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between transition ${
+                        className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between transition cursor-pointer ${
                           currentUser.id === user.id ? 'bg-blue-50 text-blue-950 font-semibold' : 'hover:bg-slate-50 text-slate-700'
                         }`}
                       >
                         <div className="flex items-center space-x-2">
                           <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs text-white ${
-                            user.role === 'owner' ? 'bg-amber-600' : user.role === 'cashier' ? 'bg-blue-600' : 'bg-indigo-600'
+                            user.role === 'owner' ? 'bg-amber-600' : user.role === 'manager' ? 'bg-purple-600' : user.role === 'cashier' ? 'bg-blue-600' : 'bg-indigo-600'
                           }`}>
                             {user.name.charAt(0)}
                           </div>
@@ -243,6 +250,19 @@ export const Navbar: React.FC = () => {
                         {getRoleBadge(user.role)}
                       </button>
                     ))}
+                  </div>
+
+                  <div className="border-t border-slate-100 mt-1 pt-1 px-1">
+                    <button
+                      onClick={() => {
+                        setShowUserDropdown(false);
+                        logoutBusiness();
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-lg text-xs text-red-600 hover:bg-red-50 flex items-center gap-2 font-medium transition cursor-pointer"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                      <span>Changer d'Entreprise</span>
+                    </button>
                   </div>
                 </div>
               )}
