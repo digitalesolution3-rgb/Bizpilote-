@@ -38,9 +38,52 @@ import {
   deleteDoc,
   onSnapshot, 
   writeBatch,
-  query,
-  where
+  getDocFromServer
 } from 'firebase/firestore';
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: null,
+      email: null,
+      emailVerified: null,
+      isAnonymous: null,
+      tenantId: null,
+      providerInfo: []
+    },
+    operationType,
+    path
+  };
+  console.warn('Firestore Operation Sync Notice:', JSON.stringify(errInfo));
+  return errInfo;
+}
 
 interface AppContextType {
   // Business Multi-Tenant State
@@ -342,13 +385,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAllBusinesses(prev => [newBusiness, ...prev]);
     setAllUsers(prev => [...prev, newOwner]);
 
-    if (isOnline) {
-      try {
-        await setDoc(doc(db, 'businesses', id), newBusiness);
-        await setDoc(doc(db, 'users', ownerUserId), newOwner);
-      } catch (err) {
-        console.warn('Firestore offline fallback for create business:', err);
-      }
+    try {
+      await setDoc(doc(db, 'businesses', id), newBusiness);
+      await setDoc(doc(db, 'users', ownerUserId), newOwner);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'businesses');
     }
 
     return newBusiness;
@@ -364,12 +405,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBusiness(prev => ({ ...prev, ...updates }));
     }
 
-    if (isOnline) {
-      try {
-        await updateDoc(doc(db, 'businesses', id), updates);
-      } catch (err) {
-        console.warn('Firestore update business error:', err);
-      }
+    try {
+      await updateDoc(doc(db, 'businesses', id), updates);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `businesses/${id}`);
     }
   };
 
@@ -385,12 +424,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    if (isOnline) {
-      try {
-        await deleteDoc(doc(db, 'businesses', id));
-      } catch (err) {
-        console.warn('Firestore delete business error:', err);
-      }
+    try {
+      await deleteDoc(doc(db, 'businesses', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `businesses/${id}`);
     }
   };
 
@@ -443,12 +480,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setAllUsers(prev => [...prev, newUser]);
 
-    if (isOnline) {
-      try {
-        await setDoc(doc(db, 'users', id), newUser);
-      } catch (err) {
-        console.warn('Firestore add user error:', err);
-      }
+    try {
+      await setDoc(doc(db, 'users', id), newUser);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'users');
     }
 
     return newUser;
@@ -463,12 +498,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCurrentUser(prev => ({ ...prev, ...updates }));
     }
 
-    if (isOnline) {
-      try {
-        await updateDoc(doc(db, 'users', userId), updates);
-      } catch (err) {
-        console.warn('Firestore update user error:', err);
-      }
+    try {
+      await updateDoc(doc(db, 'users', userId), updates);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${userId}`);
     }
   };
 
@@ -492,12 +525,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    if (isOnline) {
-      try {
-        await deleteDoc(doc(db, 'users', id));
-      } catch (err) {
-        console.warn('Firestore delete user error:', err);
-      }
+    try {
+      await deleteDoc(doc(db, 'users', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `users/${id}`);
     }
   };
 
@@ -543,7 +574,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [isPlatformAdminUnlocked]);
 
-  // Save to localStorage whenever core state updates
+  // Save to localStorage whenever core state updates (fast offline recovery cache)
   useEffect(() => {
     const dataToSave = {
       allBusinesses,
@@ -590,7 +621,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Sync with Firestore
+  // Multi-Device Real-Time Cloud Synchronization Engine with Firestore
   useEffect(() => {
     if (!isOnline) return;
 
@@ -600,12 +631,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let unsubscribeCustomers: (() => void) | undefined;
     let unsubscribeExpenses: (() => void) | undefined;
     let unsubscribeUsers: (() => void) | undefined;
+    let unsubscribeStockMovements: (() => void) | undefined;
+    let unsubscribeCustomerPayments: (() => void) | undefined;
 
     const setupFirestoreSync = async () => {
       try {
         setIsSyncing(true);
 
-        // 1. Businesses listener
+        // 0. Verify connection and test document
+        try {
+          await getDocFromServer(doc(db, 'system', 'connection_test')).catch(() => null);
+        } catch {
+          // Non-blocking connection test
+        }
+
+        // 1. Initial Cloud Seeding Check: If Firestore is fresh / empty across all devices, seed standard master dataset
+        try {
+          const bizSnapshot = await getDocs(collection(db, 'businesses'));
+          if (bizSnapshot.empty) {
+            console.log('Seeding initial master data to Cloud Firestore for multi-device collaboration...');
+            const batch = writeBatch(db);
+            
+            initialBusinesses.forEach(b => {
+              batch.set(doc(db, 'businesses', b.id), b);
+            });
+            initialUsers.forEach(u => {
+              batch.set(doc(db, 'users', u.id), u);
+            });
+            initialProducts.forEach(p => {
+              batch.set(doc(db, 'products', p.id), p);
+            });
+            initialCustomers.forEach(c => {
+              batch.set(doc(db, 'customers', c.id), c);
+            });
+            initialExpenses.forEach(e => {
+              batch.set(doc(db, 'expenses', e.id), e);
+            });
+            initialSales.forEach(s => {
+              batch.set(doc(db, 'sales', s.id), s);
+            });
+            initialStockMovements.forEach(sm => {
+              batch.set(doc(db, 'stock_movements', sm.id), sm);
+            });
+
+            await batch.commit();
+          }
+        } catch (seedErr) {
+          console.warn('Notice on initial seeding to Firestore:', seedErr);
+        }
+
+        // 2. Real-Time Businesses Listener (Multi-Tenant & Codes)
         const bizCol = collection(db, 'businesses');
         unsubscribeBusinesses = onSnapshot(bizCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -615,13 +690,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             if (list.length > 0) {
               setAllBusinesses(list);
-              const currentUpdated = list.find(b => b.id === business.id);
-              if (currentUpdated) setBusiness(currentUpdated);
+              setBusiness(prev => {
+                const updated = list.find(b => b.id === prev.id);
+                return updated || prev;
+              });
             }
           }
-        }, (err) => console.log('Businesses snapshot fallback:', err.message));
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'businesses'));
 
-        // 2. Products listener
+        // 3. Real-Time Products Listener (When Gérant adds/edits an article, Caissière receives it instantly!)
         const prodCol = collection(db, 'products');
         unsubscribeProducts = onSnapshot(prodCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -631,9 +708,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             setProducts(list);
           }
-        }, (err) => console.log('Products snapshot fallback:', err.message));
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'products'));
 
-        // 3. Sales listener
+        // 4. Real-Time Sales Listener (When Caissière sells on Device B, Owner sees it on Device A in real time!)
         const salesCol = collection(db, 'sales');
         unsubscribeSales = onSnapshot(salesCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -643,9 +720,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             setSales(list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
           }
-        }, (err) => console.log('Sales snapshot fallback:', err.message));
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'sales'));
 
-        // 4. Customers listener
+        // 5. Real-Time Customers & Debts Listener
         const custCol = collection(db, 'customers');
         unsubscribeCustomers = onSnapshot(custCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -655,9 +732,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             setCustomers(list);
           }
-        }, (err) => console.log('Customers snapshot fallback:', err.message));
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'customers'));
 
-        // 5. Expenses listener
+        // 6. Real-Time Customer Reimbursements Listener
+        const custPayCol = collection(db, 'customer_payments');
+        unsubscribeCustomerPayments = onSnapshot(custPayCol, (snapshot) => {
+          if (!snapshot.empty) {
+            const list: CustomerPayment[] = [];
+            snapshot.forEach(docSnap => {
+              list.push({ id: docSnap.id, ...docSnap.data() } as CustomerPayment);
+            });
+            setCustomerPayments(list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+          }
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'customer_payments'));
+
+        // 7. Real-Time Stock Movements Listener
+        const movCol = collection(db, 'stock_movements');
+        unsubscribeStockMovements = onSnapshot(movCol, (snapshot) => {
+          if (!snapshot.empty) {
+            const list: StockMovement[] = [];
+            snapshot.forEach(docSnap => {
+              list.push({ id: docSnap.id, ...docSnap.data() } as StockMovement);
+            });
+            setStockMovements(list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+          }
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'stock_movements'));
+
+        // 8. Real-Time Expenses Listener
         const expCol = collection(db, 'expenses');
         unsubscribeExpenses = onSnapshot(expCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -667,9 +768,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             setExpenses(list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
           }
-        }, (err) => console.log('Expenses snapshot fallback:', err.message));
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'expenses'));
 
-        // 6. Users listener
+        // 9. Real-Time Users & PINs Listener
         const usersCol = collection(db, 'users');
         unsubscribeUsers = onSnapshot(usersCol, (snapshot) => {
           if (!snapshot.empty) {
@@ -678,8 +779,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               list.push({ id: docSnap.id, ...docSnap.data() } as AppUser);
             });
             setAllUsers(list);
+            setCurrentUser(prev => {
+              const updated = list.find(u => u.id === prev.id);
+              return updated || prev;
+            });
           }
-        }, (err) => console.log('Users snapshot fallback:', err.message));
+        }, (err) => handleFirestoreError(err, OperationType.LIST, 'users'));
 
         setLastSyncedAt(new Date());
         setIsSyncing(false);
@@ -698,8 +803,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubscribeCustomers?.();
       unsubscribeExpenses?.();
       unsubscribeUsers?.();
+      unsubscribeStockMovements?.();
+      unsubscribeCustomerPayments?.();
     };
-  }, [isOnline, business.id]);
+  }, [isOnline]);
 
   // Current Business scoped entities
   const scopedProducts = useMemo(() => 
@@ -831,7 +938,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCart([]);
   };
 
-  // Complete a sale
+  // Complete a sale (multi-device synced)
   const completeSale = async (
     paymentMethod: PaymentMethod,
     customerId?: string,
@@ -887,7 +994,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: nowIso,
     };
 
-    // Update local sales
+    // Update local sales optimistically
     setSales(prev => [newSale, ...prev]);
 
     // 1. Decrement products stock & record stock movements
@@ -923,11 +1030,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setStockMovements(prev => [...newMovements, ...prev]);
 
     // 2. If credit sale, increase customer's totalDebt
+    let customerCreditIncrement = 0;
     if ((paymentMethod === 'credit' || (splitDetails && (splitDetails.credit || 0) > 0)) && customerId) {
-      const creditAmount = paymentMethod === 'credit' ? total : (splitDetails?.credit || 0);
+      customerCreditIncrement = paymentMethod === 'credit' ? total : (splitDetails?.credit || 0);
       setCustomers(prev =>
         prev.map(c =>
-          c.id === customerId ? { ...c, totalDebt: c.totalDebt + creditAmount } : c
+          c.id === customerId ? { ...c, totalDebt: c.totalDebt + customerCreditIncrement } : c
         )
       );
     }
@@ -935,27 +1043,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 3. Clear cart
     clearCart();
 
-    // 4. Async Firestore Sync
-    if (isOnline) {
-      try {
-        await setDoc(doc(db, 'sales', saleId), newSale);
-        for (const p of updatedProducts) {
-          const itemInSale = saleItems.find(si => si.productId === p.id);
-          if (itemInSale) {
-            await updateDoc(doc(db, 'products', p.id), {
-              currentStock: p.currentStock,
-            });
-          }
+    // 4. Multi-Device Real-Time Cloud Firestore Sync
+    try {
+      await setDoc(doc(db, 'sales', saleId), newSale);
+      
+      for (const p of updatedProducts) {
+        const itemInSale = saleItems.find(si => si.productId === p.id);
+        if (itemInSale) {
+          await updateDoc(doc(db, 'products', p.id), {
+            currentStock: p.currentStock,
+          });
         }
-      } catch (err) {
-        console.warn('Firestore offline fallback for sale:', err);
       }
+
+      for (const mov of newMovements) {
+        await setDoc(doc(db, 'stock_movements', mov.id), mov);
+      }
+
+      if (customerId && customerCreditIncrement > 0) {
+        const currentCust = customers.find(c => c.id === customerId);
+        if (currentCust) {
+          await updateDoc(doc(db, 'customers', customerId), {
+            totalDebt: currentCust.totalDebt + customerCreditIncrement,
+          });
+        }
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'sales');
     }
 
     return newSale;
   };
 
-  // Add Product
+  // Add Product (Real-time synced across all devices)
   const addProduct = async (productData: Omit<Product, 'id' | 'businessId' | 'createdAt'>): Promise<Product> => {
     const id = `prod_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
     const nowIso = new Date().toISOString();
@@ -968,8 +1088,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setProducts(prev => [newProduct, ...prev]);
 
+    let initMov: StockMovement | null = null;
     if (newProduct.currentStock > 0) {
-      const initMov: StockMovement = {
+      initMov = {
         id: `mov_${Date.now()}_init`,
         businessId: business.id,
         productId: id,
@@ -983,32 +1104,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userName: currentUser.name,
         createdAt: nowIso,
       };
-      setStockMovements(prev => [initMov, ...prev]);
+      setStockMovements(prev => [initMov!, ...prev]);
     }
 
-    if (isOnline) {
-      try {
-        await setDoc(doc(db, 'products', id), newProduct);
-      } catch (err) {
-        console.warn('Firestore offline fallback for add product:', err);
+    try {
+      await setDoc(doc(db, 'products', id), newProduct);
+      if (initMov) {
+        await setDoc(doc(db, 'stock_movements', initMov.id), initMov);
       }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `products/${id}`);
     }
 
     return newProduct;
   };
 
-  // Update Product
+  // Update Product (Real-time synced)
   const updateProduct = async (id: string, updates: Partial<Product>) => {
     setProducts(prev =>
       prev.map(p => (p.id === id ? { ...p, ...updates } : p))
     );
 
-    if (isOnline) {
-      try {
-        await updateDoc(doc(db, 'products', id), updates);
-      } catch (err) {
-        console.warn('Firestore error updating product:', err);
-      }
+    try {
+      await updateDoc(doc(db, 'products', id), updates);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `products/${id}`);
     }
   };
 
@@ -1032,7 +1152,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nowIso = new Date().toISOString();
 
     const newMovement: StockMovement = {
-      id: `mov_${Date.now()}`,
+      id: `mov_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
       businessId: business.id,
       productId,
       productName: targetProduct.name,
@@ -1049,18 +1169,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setStockMovements(prev => [newMovement, ...prev]);
     await updateProduct(productId, { currentStock: nextStock });
 
-    if (isOnline) {
-      try {
-        await setDoc(doc(db, 'stock_movements', newMovement.id), newMovement);
-      } catch (e) {
-        console.warn('Firestore stock movement error:', e);
-      }
+    try {
+      await setDoc(doc(db, 'stock_movements', newMovement.id), newMovement);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, `stock_movements/${newMovement.id}`);
     }
   };
 
   // Add Customer
   const addCustomer = async (customerData: Omit<Customer, 'id' | 'businessId' | 'createdAt' | 'totalDebt'>): Promise<Customer> => {
-    const id = `cust_${Date.now()}`;
+    const id = `cust_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
     const newCust: Customer = {
       ...customerData,
       id,
@@ -1071,12 +1189,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setCustomers(prev => [...prev, newCust]);
 
-    if (isOnline) {
-      try {
-        await setDoc(doc(db, 'customers', id), newCust);
-      } catch (e) {
-        console.warn('Firestore add customer error:', e);
-      }
+    try {
+      await setDoc(doc(db, 'customers', id), newCust);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, `customers/${id}`);
     }
 
     return newCust;
@@ -1088,12 +1204,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map(c => (c.id === id ? { ...c, ...updates } : c))
     );
 
-    if (isOnline) {
-      try {
-        await updateDoc(doc(db, 'customers', id), updates);
-      } catch (e) {
-        console.warn('Firestore update customer error:', e);
-      }
+    try {
+      await updateDoc(doc(db, 'customers', id), updates);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `customers/${id}`);
     }
   };
 
@@ -1107,7 +1221,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cust = customers.find(c => c.id === customerId);
     if (!cust) return;
 
-    const paymentId = `pay_${Date.now()}`;
+    const paymentId = `pay_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
     const nowIso = new Date().toISOString();
     const newPayment: CustomerPayment = {
       id: paymentId,
@@ -1127,12 +1241,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCustomerPayments(prev => [newPayment, ...prev]);
     await updateCustomer(customerId, { totalDebt: newDebt });
 
-    if (isOnline) {
-      try {
-        await setDoc(doc(db, 'customer_payments', paymentId), newPayment);
-      } catch (e) {
-        console.warn('Firestore record payment error:', e);
-      }
+    try {
+      await setDoc(doc(db, 'customer_payments', paymentId), newPayment);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, `customer_payments/${paymentId}`);
     }
   };
 
@@ -1145,7 +1257,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     beneficiary: string;
     notes?: string;
   }): Promise<Expense> => {
-    const id = `exp_${Date.now()}`;
+    const id = `exp_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
     const nowIso = new Date().toISOString();
     const newExp: Expense = {
       ...expenseData,
@@ -1158,12 +1270,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setExpenses(prev => [newExp, ...prev]);
 
-    if (isOnline) {
-      try {
-        await setDoc(doc(db, 'expenses', id), newExp);
-      } catch (e) {
-        console.warn('Firestore add expense error:', e);
-      }
+    try {
+      await setDoc(doc(db, 'expenses', id), newExp);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, `expenses/${id}`);
     }
 
     return newExp;
@@ -1194,6 +1304,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCustomerPayments([]);
     setCart([]);
     localStorage.removeItem(LOCAL_STORAGE_KEY);
+
+    try {
+      const batch = writeBatch(db);
+      initialBusinesses.forEach(b => batch.set(doc(db, 'businesses', b.id), b));
+      initialUsers.forEach(u => batch.set(doc(db, 'users', u.id), u));
+      initialProducts.forEach(p => batch.set(doc(db, 'products', p.id), p));
+      initialCustomers.forEach(c => batch.set(doc(db, 'customers', c.id), c));
+      initialExpenses.forEach(e => batch.set(doc(db, 'expenses', e.id), e));
+      initialSales.forEach(s => batch.set(doc(db, 'sales', s.id), s));
+      initialStockMovements.forEach(sm => batch.set(doc(db, 'stock_movements', sm.id), sm));
+      await batch.commit();
+    } catch (e) {
+      console.warn('Reset demo batch error:', e);
+    }
   };
 
   // Compute live Business Summary for current scoped business
